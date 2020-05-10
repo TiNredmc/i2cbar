@@ -136,7 +136,9 @@ CLK_PCKENR1 |= (uint8_t)(1 << 0x03);// enable the I2C clock
 	PB_ODR = 0;	
 	__asm__("rim");// enble interrupt
 	while(1){
-	__asm__("wfi");
+	PB_ODR = r ;
+	r++;
+	delay_ms(250);
 	}
 
 }// main 
