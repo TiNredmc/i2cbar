@@ -1,29 +1,23 @@
 /* Bi color LED bargraph dislaying CPU workload 
- * coded by TinLethax
+ * coded by TinLethax Update 2022/08/08
  */
 #include <stm8l.h>
 #include <stdint.h>
-#include <stdio.h>
-#include <string.h>
 #include <usart.h>
 #include <delay.h>
 
-#define devID (uint8_t)0x32 // slave address for the stm8l
+#define devID (uint8_t)0x19 // slave address for the stm8l
 volatile uint16_t Event = 0x00;
 uint8_t cpuload = 0x00;
 
-uint16_t REMAP_Pin = 0x011C; 
 
 
-int putchar(int c){
-	usart_write(c);
-	return 0;
+#ifdef DEBUF
+void prntf(char *txt){
+	while(*txt)
+		usart_write(*txt++);
 }
-
-int get_char() {
-	return usart_read();
-}
-
+#endif
 // For BI-color bargraph LED
 //////////////////////////////////////////////////
 void BGinit(){ // GPIO init for bargraph 
@@ -32,7 +26,6 @@ void BGinit(){ // GPIO init for bargraph
 }
 
 void BGUpdate(uint8_t per){
-	PB_ODR = 0x00;
 	if (per < 14){
 	PB_ODR = 0x02;
 	}else if ((per > 13) && (per < 26)){
@@ -55,29 +48,30 @@ void BGUpdate(uint8_t per){
 // For I2C
 //////////////////////////////////////////////////
 uint16_t SCLSpeed = 0x0050;
-void i2c_init() {
+void i2cinit() {
+	CLK_PCKENR1 |= 1 << 3;// enable the I2C clock 
     I2C1_FREQR |= 16;// 16MHz/10^6
 	
     I2C1_CR1 &= ~0x01;// cmd disable for i2c configurating
 
     I2C1_TRISER |= (uint8_t)(17);// Riser time  
 
-    I2C1_CCRL = (uint8_t)SCLSpeed;
-    I2C1_CCRH = (uint8_t)((SCLSpeed >> 8) & 0x0F);
+    I2C1_CCRL = 0x50;
+    I2C1_CCRH = 0x00;
 
     I2C1_CR1 |= (0x00 | 0x01);// i2c mode not SMBus
 	
-    I2C1_OARL = (uint8_t)(devID);
-    I2C1_OARH = (uint8_t)((uint8_t)(0x00 | 0x40 ) | (uint8_t)((uint16_t)( (uint16_t)devID &  (uint16_t)0x0300) >> 7)); 
+    I2C1_OARL = devID << 1;
+    I2C1_OARH = 0x40; 
 
-    I2C1_CR2 = (uint8_t)(1 << 2);
+    I2C1_CR2 = (1 << 2);
 
     I2C1_CR1 |= (1 << 0);// cmd enable
 
     I2C1_ITR |= (1 << 0) | (1 << 1) | (1 << 2);// enable interrupt (buffer, event an error interrupt)
 }
 
-uint8_t i2c_read()
+uint8_t i2cread()
 {
   /* Return the data present in the DR register */
   return ((uint8_t)I2C1_DR);
@@ -87,7 +81,9 @@ uint8_t i2c_read()
 //////////////////////////////////////////////////
 
 void i2c_slaveInt(void) __interrupt(29){
-	printf("data packet received\n");
+#ifdef DEBUG
+	prntf("data packet received\n");
+#endif
 	PB_ODR = 0;
 	/* Dummy reaing the SR2 */
 	volatile uint8_t dummyread = 0x00;
@@ -100,23 +96,27 @@ void i2c_slaveInt(void) __interrupt(29){
 	flag1 = I2C1_SR1;
 	flag2 = I2C1_SR3;
 	eviic = ((uint16_t)((uint16_t)flag2 << (uint16_t)8) | (uint16_t)flag1);
-	printf("The event number is :%X\n",eviic);
+
 	switch(eviic){
 
     	case 0x0202 : //I2C_EVENT_SLAVE_RECEIVER_ADDRESS_MATCHED 
-	printf("someone calling me!\n");
+			while(!(I2C1_SR1 & 0x40));
+			cpuload = I2C1_DR;// read data	
+			
       	break;
 
-      /* Check on EV2*/
-    	case 0x0240 :// I2C_EVENT_SLAVE_BYTE_RECEIVED 
-      	cpuload = i2c_read();
-	printf("I've got %x\n",cpuload);
-	BGUpdate(cpuload);
-      	break;
+		case 0x0010:// I2C_EVENT_SLAVE_STOP_RECEIVED	
+			I2C1_CR2 |= (1 << I2C1_CR2_ACK);// send ack 
+			
+		break;
 
     	default:
 	break;
 	}
+	
+	// Clear Interrupt flag
+	if(I2C1_SR1 & 0x10)
+		I2C1_CR2 = 0x00;
 
 }
 
@@ -125,20 +125,23 @@ void i2c_slaveInt(void) __interrupt(29){
 //////////////////////////////////////////////////
 uint8_t r = 0;
 void main(){
-CLK_CKDIVR = 0x00;
-usart_init(19200); // usart using baudrate at 9600
-SYSCFG_RMPCR1 &= (uint8_t)((uint8_t)((uint8_t)REMAP_Pin << 4) | (uint8_t)0x0F); //remap the non-exit pin of Tx and Rx of the UFQFPN20 package to the exit one.
-SYSCFG_RMPCR1 |= (uint8_t)((uint16_t)REMAP_Pin & (uint16_t)0x00F0);
-CLK_PCKENR1 |= (uint8_t)(1 << 0x03);// enable the I2C clock 
+	CLK_CKDIVR = 0x00;
+	usart_init(9600); // usart using baudrate at 9600
+	SYSCFG_RMPCR1 |= 0x10;// USART remapped to PA2(TX) and PA3(RX).
+	usart_write(0x0C);
+	usart_write(0x0C);
+	
 	BGinit(); // init all port B 
-	i2c_init();// init i2c as slave having address 0x65
-	printf(" starting...\n");
+	i2cinit();// init i2c as slave with 7bit address == 0x19
+#ifdef DEBUG
+	prntf("i2cbar starting...\n");
+#endif
 	PB_ODR = 0;	
 	__asm__("rim");// enble interrupt
+	
 	while(1){
-	PB_ODR = r ;
-	r++;
-	delay_ms(250);
+		BGUpdate(cpuload);
+		//delay_ms(1000);
 	}
 
 }// main 
