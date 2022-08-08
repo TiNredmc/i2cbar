@@ -20,8 +20,7 @@ while true; do
   DIFF_IDLE=$((IDLE-PREV_IDLE))
   DIFF_TOTAL=$((TOTAL-PREV_TOTAL))
   DIFF_USAGE=$(((1000*(DIFF_TOTAL-DIFF_IDLE)/DIFF_TOTAL+5)/10))
-  i2cset -y 10 0x19 $DIFF_USAGE
-  i2cset -y 10 0x19 $DIFF_USAGE #stupid workaround
+  i2cset -y $1 0x19 $DIFF_USAGE
  
   # Remember the total and idle CPU times for the next check.
   PREV_TOTAL="$TOTAL"
